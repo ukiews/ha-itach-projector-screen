@@ -258,14 +258,19 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
         if self._cancel_tick is not None:
             self._cancel_tick()
             self._cancel_tick = None
-        self._move = None
         self._stop_pending = True
         self.async_write_ha_state()
-        stopped_at = await self._async_pulse(STOP)
+        try:
+            stopped_at = await self._async_pulse(STOP)
+        except HomeAssistantError:
+            self._move = None
+            self.async_write_ha_state()
+            raise
         if position is not None:
             self._position = position
         elif move is not None:
             self._position = move.estimate(stopped_at)
+        self._move = None
         if self._position is not None:
             self._last_known_raised = self._position == 100
         self._stop_pending = False
