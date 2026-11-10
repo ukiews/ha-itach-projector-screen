@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 import sys
+from time import monotonic
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.states = {"1:1": "0", "1:2": "0"}
         self.sessions = []
+        self.timestamps = []
         self.fail_first_engage = False
         self.fail_first_release = False
         self.server = await asyncio.start_server(self.handle, "127.0.0.1", 0)
@@ -33,6 +35,7 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             while True:
                 cmd = (await reader.readuntil(b"\r")).decode().strip()
                 commands.append(cmd)
+                self.timestamps.append((cmd, monotonic()))
                 verb, relay, *value = cmd.split(",")
                 if verb == "getstate":
                     reply = f"state,{relay},{self.states[relay]}"
@@ -86,6 +89,20 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_commands_serialize(self):
         await asyncio.gather(self.controller.pulse(RAISE), self.controller.pulse(LOWER))
         self.assertEqual(self.sessions[1][:3], ["getstate,1:1", "getstate,1:2", "setstate,1:2,1"])
+
+
+    async def test_motion_waits_after_stop_release(self):
+        with patch("controller.MOTION_SETTLE_SECONDS", .1):
+            await self.controller.pulse(STOP)
+            await self.controller.pulse(LOWER)
+        released = next(t for cmd, t in self.timestamps if cmd == "getstate,1:2")
+        engaged = next(t for cmd, t in self.timestamps if cmd == "setstate,1:2,1" and t > released)
+        self.assertGreaterEqual(engaged - released, .09)
+
+    async def test_stop_does_not_wait_for_motion_settling(self):
+        self.controller._next_motion_at = monotonic() + 60
+        async with asyncio.timeout(.5):
+            await self.controller.pulse(STOP)
 
 
 class PositionTests(unittest.TestCase):

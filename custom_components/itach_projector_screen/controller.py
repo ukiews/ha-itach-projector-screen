@@ -9,6 +9,7 @@ RAISE = (1,)
 LOWER = (2,)
 STOP = (1, 2)
 PULSE_SECONDS = {RAISE: 0.1, LOWER: 0.1, STOP: 0.5}
+MOTION_SETTLE_SECONDS = 0.75
 
 
 class ControllerError(OSError):
@@ -62,6 +63,7 @@ class ScreenController:
         self.host = host
         self.port = port
         self.lock = asyncio.Lock()
+        self._next_motion_at = 0.0
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[Connection]:
@@ -79,6 +81,9 @@ class ScreenController:
 
     async def pulse(self, contacts: tuple[int, ...]) -> float:
         async with self.lock:
+            if contacts != STOP:
+                # The screen receiver needs a quiet interval after released contacts.
+                await asyncio.sleep(max(0.0, self._next_motion_at - monotonic()))
             async with self._connect() as connection:
                 if contacts != STOP and any(await connection.read_contacts()):
                     raise ControllerError("A relay is already engaged. Send Stop before moving.")
@@ -93,4 +98,5 @@ class ScreenController:
                         # Recover only by releasing contacts. Never replay a motion command.
                         async with self._connect() as recovery:
                             await recovery.release()
+                    self._next_motion_at = monotonic() + MOTION_SETTLE_SECONDS
                 return started_at
