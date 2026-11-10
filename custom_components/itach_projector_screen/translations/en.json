@@ -48,5 +48,58 @@
       "already_configured": "This iTach is already configured.",
       "reconfigure_successful": "Projector screen settings updated."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Calibrate projector screen",
+        "description": "Make sure the screen’s travel area is clear and you can see both physical limits. Start raises the screen. You’ll mark the endpoints as the screen reaches them.",
+        "menu_options": {
+          "start": "Start and raise screen",
+          "cancel": "Cancel"
+        }
+      },
+      "start": {
+        "title": "Set the starting top position",
+        "description": "Watch the screen rise. When it has stopped fully raised, mark the top to begin measuring the descent.",
+        "menu_options": {
+          "initial_top": "Mark top and lower screen",
+          "cancel": "Stop and cancel"
+        }
+      },
+      "initial_top": {
+        "title": "Set the bottom position",
+        "description": "Tap as soon as the screen reaches its fully lowered position. This records the lower time and starts raising the screen.",
+        "menu_options": {
+          "bottom": "Mark bottom and raise screen",
+          "cancel": "Stop and cancel"
+        }
+      },
+      "bottom": {
+        "title": "Set the top position",
+        "description": "Tap as soon as the screen reaches its fully raised position. This records the raise time and stops the screen.",
+        "menu_options": {
+          "final_top": "Mark top and review",
+          "cancel": "Stop and cancel"
+        }
+      },
+      "save": {
+        "title": "Review travel times",
+        "description": "You can adjust either measurement before saving. The screen’s current position will be set to 100% (fully raised).",
+        "data": {
+          "raise_seconds": "Full raise time (seconds)",
+          "lower_seconds": "Full lower time (seconds)"
+        }
+      }
+    },
+    "abort": {
+      "calibration_cancelled": "Calibration cancelled.",
+      "calibration_unavailable": "The projector screen is unavailable.",
+      "screen_busy": "The screen is moving or another calibration is open. Stop the screen or finish the other calibration first.",
+      "motion_disabled": "Screen motion is disabled. Enable it before calibrating.",
+      "calibration_expired": "Calibration was stopped or timed out. Open Configure to start again.",
+      "invalid_measurement": "The measured travel time was too short or too long. Start again and mark each endpoint as it is reached.",
+      "calibration_failed": "The iTach did not confirm a command. If the screen is still moving, use Stop or the wall control."
+    }
   }
 }

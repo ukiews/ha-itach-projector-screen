@@ -7,3 +7,7 @@ CONF_RAISE_SECONDS = "raise_seconds"
 CONF_LOWER_SECONDS = "lower_seconds"
 CONF_DAILY_TIME = "daily_calibration_time"
 CONF_ENABLE_ENTITY = "motion_enable_entity"
+
+MIN_TRAVEL_SECONDS = 1
+MAX_TRAVEL_SECONDS = 600
+CALIBRATION_TIMEOUT = 120

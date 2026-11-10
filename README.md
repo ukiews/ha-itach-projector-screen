@@ -21,7 +21,11 @@ The optional **Motion enable helper** accepts an input boolean. Switching it off
 
 ## Optional timed positioning
 
-Use **Reconfigure** on the integration to enter separate full raise and full lower times, measured in seconds. Leave both fields empty for basic Up, Down, and Stop with unknown position.
+Open the projector screen device in Home Assistant, select its **iTach Projector Screen** integration, and choose **Configure**. The guided calibration raises the screen to establish the starting point, then measures the descent and ascent as you mark the bottom and top. You can adjust the recorded times before saving. Saving sets the cover to 100% and enables the position slider immediately.
+
+Stay where you can see the screen and keep its travel area clear. Choose **Stop and cancel** to end a calibration early. Home Assistant also attempts Stop when it closes the wizard or the session times out. Mark the endpoints as soon as the screen stops to reduce measurement error.
+
+You can also use **Reconfigure** on the integration to enter separate full raise and full lower times in seconds. Leave both fields empty for basic Up, Down, and Stop with unknown position.
 
 With timing enabled, raise the screen fully in Home Assistant to calibrate the estimate. **100%** is fully raised and **0%** is fully lowered. A percentage command starts a move and sends Stop after the calculated travel time. Full raise or lower commands run for the configured full travel time plus one second before resetting the estimate at the corresponding limit. The motor's physical limits must stop travel at the endpoints.
 

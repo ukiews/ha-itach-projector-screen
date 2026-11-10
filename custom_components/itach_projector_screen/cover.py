@@ -1,6 +1,7 @@
 """A cover with confirmed relay pulses and optional timed positioning."""
 
 import asyncio
+from dataclasses import dataclass
 from datetime import time, timedelta
 from functools import partial
 import logging
@@ -16,7 +17,10 @@ from homeassistant.helpers.event import async_call_later, async_track_time_chang
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import ScreenEntry
-from .const import CONF_DAILY_TIME, CONF_ENABLE_ENTITY, CONF_LOWER_SECONDS, CONF_RAISE_SECONDS, DOMAIN
+from .const import (
+    CALIBRATION_TIMEOUT, CONF_DAILY_TIME, CONF_ENABLE_ENTITY, CONF_LOWER_SECONDS,
+    CONF_RAISE_SECONDS, DOMAIN, MAX_TRAVEL_SECONDS, MIN_TRAVEL_SECONDS,
+)
 from .controller import LOWER, RAISE, STOP, WIRE_ERRORS
 from .position import Move
 
@@ -24,11 +28,31 @@ LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 
+@dataclass(slots=True)
+class Calibration:
+    """One open calibration wizard and its current travel measurement."""
+
+    owner: str
+    stage: str
+    deadline: float
+    started_at: float = 0.0
+    lower_seconds: float | None = None
+
+
+class CalibrationError(ServiceValidationError):
+    """A calibration action could not proceed."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ScreenEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     """Add one projector screen for the controller."""
-    async_add_entities([ProjectorScreen(entry)])
+    screen = entry.runtime_data.cover = ProjectorScreen(entry)
+    async_add_entities([screen])
 
 
 class ProjectorScreen(CoverEntity, RestoreEntity):
@@ -41,7 +65,8 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
     _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
 
     def __init__(self, entry: ScreenEntry):
-        self.controller = entry.runtime_data
+        self._entry = entry
+        self.controller = entry.runtime_data.controller
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
@@ -63,6 +88,8 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
         self._cancel_finish = None
         self._cancel_tick = None
         self._removing = False
+        self._calibration: Calibration | None = None
+        self._cancel_calibration_guard = None
 
     async def async_added_to_hass(self) -> None:
         """Recover a pending Stop, then register the optional calibration time."""
@@ -81,7 +108,9 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
         """Stop a timed move before its Stop timer is removed."""
         self._removing = True
         async with self._command_lock:
-            if self._move is not None:
+            calibration_moving = self._calibration is not None and self._stop_pending
+            self._clear_calibration()
+            if self._move is not None or calibration_moving:
                 try:
                     await self._async_stop()
                 except HomeAssistantError:
@@ -163,11 +192,15 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
             if self._removing:
                 return
             if daily and (not self.available or not self._motion_enabled()
-                          or self._move is not None or not self._last_known_raised or self._stop_pending):
+                          or self._move is not None or self._calibration is not None
+                          or not self._last_known_raised or self._stop_pending):
                 return
             if target is None:
+                self._clear_calibration()
                 await self._async_stop()
                 return
+            if self._calibration is not None:
+                raise ServiceValidationError("Finish or cancel screen calibration before moving the cover")
             if not self._motion_enabled():
                 raise ServiceValidationError("Screen motion is disabled")
             if self._move is not None:
@@ -246,3 +279,116 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
             self._last_known_raised = False
             self.async_write_ha_state()
             raise HomeAssistantError(f"iTach screen command failed: {err}") from err
+
+    async def async_start_calibration(self, owner: str) -> None:
+        """Raise the screen to a known starting point."""
+        async with self._command_lock:
+            if self._removing or not self.available:
+                raise CalibrationError("calibration_unavailable")
+            if not self._motion_enabled():
+                raise CalibrationError("motion_disabled")
+            if self._calibration is not None or self._move is not None:
+                raise CalibrationError("screen_busy")
+            if self._stop_pending:
+                await self._async_stop()
+            self._cancel_calibration_guard = async_track_time_interval(
+                self.hass, self._async_check_calibration, timedelta(seconds=2)
+            )
+            await self._async_calibration_move(owner, "initial_top", RAISE)
+
+    async def async_mark_endpoint(self, owner: str, stage: str) -> tuple[float, float] | None:
+        """Record an observed endpoint and move toward the next one."""
+        async with self._command_lock:
+            session = self._require_calibration(owner, stage)
+            reached_at = monotonic()
+            await self._async_stop()
+            if not self._motion_enabled():
+                self._clear_calibration()
+                raise CalibrationError("motion_disabled")
+            if stage == "initial_top":
+                await self._async_calibration_move(owner, "lowering", LOWER)
+                return None
+            measured = round(reached_at - session.started_at, 2)
+            if not MIN_TRAVEL_SECONDS <= measured <= MAX_TRAVEL_SECONDS:
+                self._clear_calibration()
+                raise CalibrationError("invalid_measurement")
+            if stage == "lowering":
+                await self._async_calibration_move(owner, "raising", RAISE, lower_seconds=measured)
+                return None
+            assert session.lower_seconds is not None
+            self._calibration = Calibration(owner, "review", monotonic() + CALIBRATION_TIMEOUT)
+            return measured, session.lower_seconds
+
+    async def async_save_calibration(self, owner: str, raise_seconds: float, lower_seconds: float) -> None:
+        """Persist the measured times and use the observed raised endpoint."""
+        async with self._command_lock:
+            self._require_calibration(owner, "review")
+            self.hass.config_entries.async_update_entry(self._entry, data={
+                **self._entry.data,
+                CONF_RAISE_SECONDS: raise_seconds,
+                CONF_LOWER_SECONDS: lower_seconds,
+            })
+            self._raise_seconds = raise_seconds
+            self._lower_seconds = lower_seconds
+            self._position = 100
+            self._last_known_raised = True
+            self._attr_supported_features |= CoverEntityFeature.SET_POSITION
+            self._clear_calibration()
+            self.async_write_ha_state()
+
+    async def async_cancel_calibration(self, owner: str) -> None:
+        """Stop an active calibration owned by this wizard."""
+        async with self._command_lock:
+            if self._calibration is not None and self._calibration.owner == owner:
+                await self._async_cancel_calibration()
+
+    def _require_calibration(self, owner: str, stage: str) -> Calibration:
+        session = self._calibration
+        if (self._removing or session is None or session.owner != owner
+                or session.stage != stage or monotonic() >= session.deadline):
+            raise CalibrationError("calibration_expired")
+        return session
+
+    async def _async_calibration_move(
+        self, owner: str, stage: str, contacts: tuple[int, ...], *, lower_seconds: float | None = None
+    ) -> None:
+        if not self._motion_enabled():
+            self._clear_calibration()
+            raise CalibrationError("motion_disabled")
+        session = self._calibration = Calibration(
+            owner, stage, monotonic() + CALIBRATION_TIMEOUT, lower_seconds=lower_seconds,
+        )
+        self._position = None
+        self._last_known_raised = False
+        self._stop_pending = True
+        self.async_write_ha_state()
+        try:
+            session.started_at = await self._async_pulse(contacts)
+        except HomeAssistantError:
+            try:
+                await self._async_cancel_calibration()
+            except HomeAssistantError:
+                LOGGER.exception("Could not stop after a failed calibration command")
+            raise
+
+    async def _async_check_calibration(self, _now) -> None:
+        async with self._command_lock:
+            if (session := self._calibration) is None:
+                return
+            if monotonic() < session.deadline and self._motion_enabled():
+                return
+            try:
+                await self._async_cancel_calibration()
+            except HomeAssistantError:
+                LOGGER.exception("Could not stop after the calibration wizard closed or expired")
+
+    async def _async_cancel_calibration(self) -> None:
+        self._clear_calibration()
+        if self._stop_pending:
+            await self._async_stop()
+
+    def _clear_calibration(self) -> None:
+        self._calibration = None
+        if self._cancel_calibration_guard is not None:
+            self._cancel_calibration_guard()
+            self._cancel_calibration_guard = None
