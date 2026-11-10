@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import time, timedelta
 from functools import partial
 import logging
+from math import isfinite
 from time import monotonic
 
 from homeassistant.components.cover import ATTR_POSITION, CoverEntity, CoverEntityFeature
@@ -92,11 +93,22 @@ class ProjectorScreen(CoverEntity, RestoreEntity):
         self._cancel_calibration_guard = None
 
     async def async_added_to_hass(self) -> None:
-        """Recover a pending Stop, then register the optional calibration time."""
+        """Restore the stationary position and register optional calibration."""
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()) is not None:
             self._stop_pending = last.attributes.get("stop_pending") is True
             self._last_known_raised = last.attributes.get("last_known_raised") is True
+            position = last.attributes.get("current_position")
+            if (
+                not self._stop_pending
+                and self._raise_seconds is not None
+                and self._lower_seconds is not None
+                and type(position) in (int, float)
+                and isfinite(position)
+                and 0 <= position <= 100
+            ):
+                self._position = position
+                self._last_known_raised = position == 100
         if self._daily_time:
             when = time.fromisoformat(self._daily_time)
             self.async_on_remove(async_track_time_change(

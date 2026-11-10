@@ -29,7 +29,7 @@ You can also use **Reconfigure** on the integration to enter separate full raise
 
 With timing enabled, raise the screen fully in Home Assistant to calibrate the estimate. **100%** is fully raised and **0%** is fully lowered. A percentage command starts a move and sends Stop after the calculated travel time. Full raise or lower commands run for the configured full travel time plus one second before resetting the estimate at the corresponding limit. The motor's physical limits must stop travel at the endpoints.
 
-Position is a time estimate and assumes Home Assistant is the sole controller. Wall switches or other controllers can invalidate it. After a restart, reload, or failed movement command, raise the screen fully to establish the estimate again.
+Position is a time estimate and assumes Home Assistant is the sole controller. Wall switches or other controllers can invalidate it. Home Assistant restores the last stationary position after a restart or integration reload. If movement was interrupted or a command failed, raise the screen fully to establish the estimate again.
 
 For automatic recalibration, set an optional **Daily calibration time** in Home Assistant's local time zone. The integration repeats the full-raise procedure only when the screen is idle, motion is enabled, and the last completed position was 100%. That last raised state is remembered across a restart so the next daily check can recalibrate it.
 
